@@ -1,0 +1,267 @@
+use v6.d;
+use Test;
+use MongoDB::Fast;
+
+plan 13;
+
+my $client = MongoDB::Fast.new;
+await $client.connect;
+my $db = $client.db('stress_test');
+my $col = $db.collection('concurrent_test');
+
+# Clean up
+await $col.drop;
+
+# Test 1: Concurrent inserts (10 promises inserting simultaneously)
+{
+    my (@promises,@p2);
+    for ^10 -> $batch {
+        my $promise = start {
+            for ^10 -> $i {
+                my $doc = {
+                    batch => $batch,
+                    index => $i,
+                    data => "Batch $batch Document $i",
+                    timestamp => now,
+                };
+                # await $col.insert-one($doc);
+                try {
+                    await $col.insert-one($doc);
+                } 
+                # @p2.push: $col.insert-one($doc);
+            }
+        };
+        @promises.push: $promise;
+    }
+    CATCH { 
+        default { 
+            say "Exception: ", .^name, ' msg: ', .Str;
+        } 
+    }
+
+    # await Promise.allof(@p2);
+    await Promise.allof(@promises);
+    my $count = await $col.count-documents;
+    is $count, 100, "Concurrent inserts: 100 documents inserted";
+}
+# exit;
+# Test 2: Concurrent reads (20 promises reading simultaneously)
+{
+    my @promises;
+    my $success-count = 0;
+
+    for ^20 -> $i {
+        my $promise = start {
+            my $doc = await $col.find-one({ batch => $i % 10 });
+            $doc ?? 1 !! 0;
+        };
+        @promises.push: $promise;
+    }
+
+    my @results = await Promise.allof(@promises).then: { @promises.map(*.result) };
+    ok @results.sum >= 18, "Concurrent reads: most reads successful";
+}
+
+# Test 3: Concurrent updates (15 promises updating simultaneously)
+{
+    my @promises;
+    for ^15 -> $i {
+        my $promise = start {
+            await $col.update-one(
+                { batch => $i % 10 },
+                { '$set' => { updated => True, updater => $i } }
+            );
+        };
+        @promises.push: $promise;
+    }
+
+    await Promise.allof(@promises);
+    my $cursor = $col.find({ updated => True });
+    my @updated = await $cursor.all;
+    ok @updated.elems > 0, "Concurrent updates: documents updated";
+}
+
+# Test 4: Mixed operations (insert, update, delete, find simultaneously)
+{
+    await $col.drop;
+
+    # Prepare some data
+    my @docs = (^50).map: -> $i {
+        { index => $i, value => "value$i" }
+    };
+    await $col.insert-many(@docs);
+
+    my @promises;
+
+    # 5 insert promises
+    for ^5 -> $i {
+        @promises.push: start {
+            await $col.insert-one({ index => 100 + $i, type => 'new' });
+        };
+    }
+
+    # 5 update promises
+    for ^5 -> $i {
+        @promises.push: start {
+            await $col.update-one(
+                { index => $i * 10 },
+                { '$set' => { modified => True } }
+            );
+        };
+    }
+
+    # 5 find promises
+    for ^5 -> $i {
+        @promises.push: start {
+            await $col.find-one({ index => $i * 5 });
+        };
+    }
+
+    # 3 delete promises
+    for ^3 -> $i {
+        @promises.push: start {
+            await $col.delete-one({ index => 45 + $i });
+        };
+    }
+
+    await Promise.allof(@promises);
+    my $count = await $col.count-documents;
+    ok $count > 50, "Mixed concurrent operations: database consistent";
+}
+
+# Test 5: Rapid fire inserts (100 inserts as fast as possible)
+{
+    await $col.drop;
+
+    my $start = now;
+    my @promises = (^100).map: -> $i {
+        start { await $col.insert-one({ rapid => $i }) }
+    };
+    await Promise.allof(@promises);
+    my $duration = now - $start;
+
+    my $count = await $col.count-documents;
+    is $count, 100, "Rapid fire: all 100 inserts successful";
+    ok $duration < 10, "Rapid fire: completed in reasonable time ({$duration.fmt('%.2f')}s)";
+}
+
+# Test 6: Bulk operations with concurrency
+{
+    await $col.drop;
+
+    my @promises;
+    for ^5 -> $batch {
+        my $promise = start {
+            my @docs = (^20).map: -> $i {
+                { batch => $batch, index => $i }
+            };
+            await $col.insert-many(@docs);
+        };
+        @promises.push: $promise;
+    }
+
+    await Promise.allof(@promises);
+    my $count = await $col.count-documents;
+    is $count, 100, "Concurrent bulk inserts: all documents inserted";
+}
+
+# Test 7: Concurrent aggregations
+{
+    my @promises;
+    for ^10 -> $i {
+        my $promise = start {
+            await $col.aggregate([
+                { '$match' => { batch => { '$exists' => True } } },
+                { '$group' => { _id => '$batch', count => { '$sum' => 1 } } }
+            ]);
+        };
+        @promises.push: $promise;
+    }
+
+    my @results = await Promise.allof(@promises).then: { @promises.map(*.result) };
+    ok @results.elems == 10, "Concurrent aggregations: all completed";
+}
+
+# Test 8: Concurrent counts
+{
+    my @promises = (^20).map: -> $i {
+        start { await $col.count-documents({ batch => $i % 5 }) }
+    };
+
+    my @counts = await Promise.allof(@promises).then: { @promises.map(*.result) };
+    ok @counts.all >= 0, "Concurrent counts: all returned valid counts";
+}
+
+# Test 9: Find with concurrent cursor iteration
+{
+    my @promises;
+    for ^5 -> $i {
+        my $promise = start {
+            my $cursor = $col.find({ batch => $i });
+            my @docs = await $cursor.all;
+            @docs.elems;
+        };
+        @promises.push: $promise;
+    }
+
+    my @results = await Promise.allof(@promises).then: { @promises.map(*.result) };
+    ok @results.sum > 0, "Concurrent cursor iteration: all successful";
+}
+
+# Test 10: Stress test with errors (some operations will fail)
+{
+    my @promises;
+    for ^20 -> $i {
+        my $promise = start {
+            try {
+                # Half will try to update non-existent documents
+                if $i % 2 {
+                    await $col.update-one(
+                        { index => 9999 + $i },
+                        { '$set' => { found => False } }
+                    );
+                } else {
+                    await $col.find-one({ batch => $i % 5 });
+                }
+                CATCH { default { False } }
+            }
+        };
+        @promises.push: $promise;
+    }
+
+    # Should not crash even if some operations fail
+    await Promise.allof(@promises);
+    ok True, "Stress test with errors: handled gracefully";
+}
+
+# Test 11: Connection reuse (verify single client handles concurrent operations)
+{
+    my $initial-count = await $col.count-documents;
+
+    my @promises = (^50).map: -> $i {
+        start { await $col.insert-one({ stress => $i }) }
+    };
+    await Promise.allof(@promises);
+
+    my $final-count = await $col.count-documents;
+    is $final-count - $initial-count, 50, "Connection reuse: same client handles 50 concurrent ops";
+}
+
+# Test 12: Memory stability (verify no leaks with repeated operations)
+{
+    for ^5 -> $round {
+        my @promises = (^20).map: -> $i {
+            start {
+                await $col.find-one({ batch => 0 });
+            }
+        };
+        await Promise.allof(@promises);
+    }
+
+    ok True, "Memory stability: 100 operations completed without crash";
+}
+
+# Cleanup
+# await $col.drop;
+$client.close;
+

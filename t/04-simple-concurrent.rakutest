@@ -1,0 +1,77 @@
+use v6.d;
+use Test;
+use MongoDB::Fast;
+
+plan 5;
+
+my $client = MongoDB::Fast.new;
+await $client.connect;
+my $db = $client.db('stress_test');
+my $col = $db.collection('simple_test');
+
+# Clean up
+await $col.drop;
+
+# Test 1: Sequential inserts (baseline)
+{
+    for ^10 -> $i {
+        await $col.insert-one({ seq => $i });
+    }
+    my $count = await $col.count-documents;
+    is $count, 10, "Sequential inserts work";
+}
+
+# Test 2: Two concurrent inserts
+{
+    await $col.drop;
+
+    my $p1 = start { await $col.insert-one({ concurrent => 1 }) };
+    my $p2 = start { await $col.insert-one({ concurrent => 2 }) };
+
+    await Promise.allof($p1, $p2);
+    my $count = await $col.count-documents;
+    is $count, 2, "Two concurrent inserts work";
+}
+
+# Test 3: Five concurrent inserts
+{
+    await $col.drop;
+
+    my @promises;
+    for ^5 -> $i {
+        @promises.push: start { await $col.insert-one({ five => $i }) };
+    }
+
+    await Promise.allof(@promises);
+    my $count = await $col.count-documents;
+    is $count, 5, "Five concurrent inserts work";
+}
+
+# Test 4: Ten concurrent inserts without nested start blocks
+{
+    await $col.drop;
+
+    my @promises = (^10).map: -> $i {
+        $col.insert-one({ ten => $i })
+    };
+
+    await Promise.allof(@promises);
+    my $count = await $col.count-documents;
+    is $count, 10, "Ten concurrent inserts (no nested start) work";
+}
+
+# Test 5: Concurrent reads
+{
+    my @promises = (^5).map: -> $i {
+        $col.find-one({ ten => $i })
+    };
+
+    my @results = await @promises;
+    ok @results.elems == 5, "Concurrent reads work";
+}
+
+# Cleanup
+await $col.drop;
+$client.close;
+
+done-testing;

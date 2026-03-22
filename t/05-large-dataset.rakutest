@@ -1,0 +1,128 @@
+use v6.d;
+use Test;
+use MongoDB::Fast;
+
+plan 11;
+
+my $client = MongoDB::Fast.new;
+await $client.connect;
+my $db = $client.db('stress_test');
+my $col = $db.collection('large_dataset');
+
+# Clean up
+await $col.drop;
+
+# Test 1: Insert 1000 documents via insert-many
+{
+    my @docs = (^1000).map: -> $i {
+        {
+            index => $i,
+            name => "User $i",
+            email => "user{$i}\@example.com",
+            age => 20 + ($i % 80),
+            score => $i * 1.5,
+            tags => ['tag1', 'tag2', 'tag3'],
+            active => $i % 2 == 0,
+        }
+    };
+
+    my $start = now;
+    my $result = await $col.insert-many(@docs);
+    my $duration = now - $start;
+
+    is $result<insertedCount>, 1000, "Inserted 1000 documents";
+    ok $duration < 5, "Insert completed in reasonable time ({$duration.fmt('%.2f')}s)";
+}
+
+# Test 2: Count all documents
+{
+    my $count = await $col.count-documents;
+    is $count, 1000, "Count returns 1000 documents";
+}
+
+# Test 3: Find all documents with cursor
+{
+    my $cursor = $col.find({}, options => { limit => 1000 });
+    my @docs = await $cursor.all;
+    is @docs.elems, 1000, "Cursor retrieves all 1000 documents";
+}
+
+# Test 4: Find with filter (should match ~250 documents)
+{
+    my $cursor = $col.find({ active => True }, options => { limit => 1000 });
+    my @docs = await $cursor.all;
+    ok @docs.elems >= 400 && @docs.elems <= 600, "Filter finds expected subset";
+}
+
+# Test 5: Update many documents
+{
+    my $result = await $col.update-many(
+        { age => { '$gte' => 50 } },
+        { '$set' => { senior => True } }
+    );
+    ok $result<modifiedCount> > 0, "Updated multiple documents";
+}
+
+# Test 6: Aggregation on large dataset
+{
+    my @result = await $col.aggregate([
+        { '$match' => { active => True } },
+        { '$group' => {
+            _id => '$age',
+            count => { '$sum' => 1 },
+            avgScore => { '$avg' => '$score' }
+        }},
+        { '$sort' => { _id => 1 } },
+        { '$limit' => 100 }
+    ]);
+    ok @result.elems > 0, "Aggregation on large dataset works";
+}
+
+# Test 7: Delete many documents
+{
+    my $result = await $col.delete-many({ age => { '$lt' => 30 } });
+    ok $result<deletedCount> > 0, "Deleted multiple documents";
+}
+
+# Test 8: Verify count after delete
+{
+    my $count = await $col.count-documents;
+    ok $count < 1000 && $count > 0, "Count correct after delete";
+}
+
+# Test 9: Insert very large document
+{
+    my $large-doc = {
+        index => 10000,
+        name => "Large Document",
+        data => ('x' x 1000),  # 1KB string
+        array => (^100).map({ { nested => $_ } }),  # 100 nested objects
+        metadata => {
+            created => DateTime.now,
+            tags => (^50).map(*.Str),
+            properties => {
+                deep => {
+                    nesting => {
+                        level => 4,
+                        value => "deep value"
+                    }
+                }
+            }
+        }
+    };
+
+    my $result = await $col.insert-one($large-doc);
+    ok $result<acknowledged>, "Inserted very large document";
+}
+
+# Test 10: Clean up - drop collection with 900+ documents
+{
+    my $start = now;
+    await $col.drop;
+    my $duration = now - $start;
+    ok $duration < 5, "Drop large collection completes quickly";
+}
+
+$client.close;
+
+done-testing;

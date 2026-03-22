@@ -1,0 +1,23 @@
+use lib 'lib';
+use Test;
+use MongoDB::Fast;
+
+plan 4;
+
+await start {
+    my $driver = MongoDB::Fast.new(:host<127.0.0.1>, :port<27017>);
+    ok $driver, 'Can create driver instance';
+
+    await $driver.connect;
+    ok (await $driver.ping()), 'Ping command works';
+
+    my $col = $driver.db('test').collection('test');
+    my $insert-result = await $col.insert-one({ foo => 'bar' });
+    ok $insert-result<acknowledged>, 'Insert works';
+
+    my $cursor = $col.find({ foo => 'bar' });
+    my @docs = await $cursor.all;
+    ok @docs.elems > 0, 'Find works';
+
+    $driver.close;
+};

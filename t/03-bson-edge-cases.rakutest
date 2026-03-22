@@ -1,0 +1,157 @@
+use v6.d;
+use Test;
+use MongoDB::Fast::BSON;
+use MongoDB::Fast::ObjectID;
+
+plan 34;
+
+my $bson = MongoDB::Fast::BSON.new;
+
+# Test 1: Empty document
+{
+    my $doc = {};
+    my $encoded = $bson.encode($doc);
+    ok $encoded, "Encodes empty document";
+    my $decoded = $bson.decode($encoded);
+    is-deeply $decoded, {}, "Decodes empty document correctly";
+}
+
+# Test 2: Very long string (4KB+)
+{
+    my $long-string = 'x' x 5000;
+    my $doc = { text => $long-string };
+    my $encoded = $bson.encode($doc);
+    my $decoded = $bson.decode($encoded);
+    is $decoded<text>.chars, 5000, "Handles long strings (5000 chars)";
+}
+
+# Test 3: Unicode and special characters
+{
+    my $doc = {
+        emoji => "🚀🎯⚡📦",
+        chinese => "你好世界",
+        arabic => "مرحبا بالعالم",
+        special => "tab\there\nnewline\r\nquote\"slash\\",
+    };
+    my $encoded = $bson.encode($doc);
+    my $decoded = $bson.decode($encoded);
+    is $decoded<emoji>, "🚀🎯⚡📦", "Handles emoji correctly";
+    is $decoded<chinese>, "你好世界", "Handles Chinese characters";
+    is $decoded<arabic>, "مرحبا بالعالم", "Handles Arabic characters";
+    ok $decoded<special>.contains("tab"), "Handles special characters";
+}
+
+# Test 4: Boundary integers
+{
+    my $doc = {
+        int32-min => -2147483648,
+        int32-max => 2147483647,
+        int64-min => -9223372036854775808,
+        int64-max => 9223372036854775807,
+        zero => 0,
+        negative => -42,
+    };
+    my $encoded = $bson.encode($doc);
+    my $decoded = $bson.decode($encoded);
+    is $decoded<int32-min>, -2147483648, "Handles INT32_MIN";
+    is $decoded<int32-max>, 2147483647, "Handles INT32_MAX";
+    is $decoded<int64-min>, -9223372036854775808, "Handles INT64_MIN";
+    is $decoded<int64-max>, 9223372036854775807, "Handles INT64_MAX";
+    is $decoded<zero>, 0, "Handles zero";
+    is $decoded<negative>, -42, "Handles negative numbers";
+}
+
+# Test 5: Floating point edge cases
+{
+    my $doc = {
+        zero => 0.0,
+        negative-zero => -0.0,
+        very-small => 1e-300,
+        very-large => 1e300,
+        pi => 3.14159265358979323846,
+    };
+    my $encoded = $bson.encode($doc);
+    my $decoded = $bson.decode($encoded);
+    ok $decoded<zero> == 0.0, "Handles 0.0";
+    ok $decoded<very-small> < 1e-299, "Handles very small numbers";
+    ok $decoded<very-large> > 1e299, "Handles very large numbers";
+    ok abs($decoded<pi> - 3.14159265358979323846) < 0.0000001, "Handles precise decimals";
+}
+
+# Test 6: Deeply nested documents
+{
+    my $doc = {
+        level1 => {
+            level2 => {
+                level3 => {
+                    level4 => {
+                        level5 => {
+                            value => "deep"
+                        }
+                    }
+                }
+            }
+        }
+    };
+    my $encoded = $bson.encode($doc);
+    my $decoded = $bson.decode($encoded);
+    is $decoded<level1><level2><level3><level4><level5><value>, "deep", "Handles deeply nested documents";
+}
+
+# Test 7: Large array
+{
+    my @large-array = (^1000).map: -> $i { $i };
+    my $doc = { numbers => @large-array };
+    my $encoded = $bson.encode($doc);
+    my $decoded = $bson.decode($encoded);
+    is $decoded<numbers>.elems, 1000, "Handles large arrays (1000 elements)";
+    is $decoded<numbers>[500], 500, "Array elements correct";
+}
+
+# Test 8: Mixed array types
+{
+    my $doc = {
+        mixed => [1, "two", 3.14, True, Nil, { nested => "value" }, [1, 2, 3]]
+    };
+    my $encoded = $bson.encode($doc);
+    my $decoded = $bson.decode($encoded);
+    is $decoded<mixed>[0], 1, "Mixed array - int";
+    is $decoded<mixed>[1], "two", "Mixed array - string";
+    ok abs($decoded<mixed>[2] - 3.14) < 0.01, "Mixed array - float";
+    is $decoded<mixed>[3], True, "Mixed array - bool";
+    ok !$decoded<mixed>[4].defined, "Mixed array - null";
+    is $decoded<mixed>[5]<nested>, "value", "Mixed array - nested doc";
+    is $decoded<mixed>[6][1], 2, "Mixed array - nested array";
+}
+
+# Test 9: Empty strings and arrays
+{
+    my $doc = {
+        empty-string => "",
+        empty-array => [],
+        empty-object => {},
+    };
+    my $encoded = $bson.encode($doc);
+    my $decoded = $bson.decode($encoded);
+    is $decoded<empty-string>, "", "Handles empty string";
+    is-deeply $decoded<empty-array>, [], "Handles empty array";
+    is-deeply $decoded<empty-object>, {}, "Handles empty object";
+}
+
+# Test 10: Keys with special characters
+{
+    my $doc = {
+        'key.with.dots' => 1,
+        'key$with$dollars' => 2,
+        'key-with-dashes' => 3,
+        'key_with_underscores' => 4,
+    };
+    my $encoded = $bson.encode($doc);
+    my $decoded = $bson.decode($encoded);
+    is $decoded<key.with.dots>, 1, "Handles keys with dots";
+    is $decoded<key$with$dollars>, 2, "Handles keys with dollars";
+    is $decoded<key-with-dashes>, 3, "Handles keys with dashes";
+    is $decoded<key_with_underscores>, 4, "Handles keys with underscores";
+}
+
+done-testing;

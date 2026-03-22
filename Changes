@@ -1,0 +1,20 @@
+Revision history for MongoDB::Fast
+
+{{$NEXT}}
+
+0.1.0  2026-03-22
+    - Initial release
+    - Async/await API using native Raku Promises
+    - Single connection with persistent background reader
+    - Connection pooling (MongoDB::Fast::Connection::Pool)
+    - Auto-reconnect with exponential backoff
+    - Full CRUD: insert-one, insert-many, find, find-one,
+      update-one, update-many, replace-one, delete-one, delete-many
+    - Aggregation pipeline support
+    - Index creation (single, compound, unique)
+    - Cursor with lazy pagination (.next / .all)
+    - count-documents, drop (collection + database)
+    - BSON encode/decode: strings, integers (32/64-bit), floats,
+      booleans, null, arrays, nested documents, ObjectID, Binary
+    - Unicode string support
+    - OP_MSG wire protocol with document sequences for bulk inserts

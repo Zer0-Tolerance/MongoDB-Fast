@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Raku
+        uses: Raku/setup-raku@v1
+        with:
+          raku-version: 'latest'
+
+      - name: Install zef
+        run: |
+          git clone https://github.com/ugexe/zef.git
+          raku -Ilib zef/bin/zef install zef --/test
+
+      - name: Install dependencies
+        run: zef install --deps-only --/test .
+
+      - name: Run tests
+        run: zef test .

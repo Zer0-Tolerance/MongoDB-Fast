@@ -1,0 +1,95 @@
+use v6.d;
+use Test;
+use MongoDB::Fast;
+
+plan 11;
+
+# Test 1-4: Basic connection info
+{
+    my $client = MongoDB::Fast.new;
+    my $info = $client.connection.connection-info;
+
+    ok $info<host> eq '127.0.0.1', "Default host is 127.0.0.1";
+    ok $info<port> == 27017, "Default port is 27017";
+    ok $info<auto-reconnect>, "Auto-reconnect enabled by default";
+    is $info<reconnect-attempts>, 0, "Initial reconnect attempts is 0";
+}
+
+# Test 5: Ping operation
+{
+    my $client = MongoDB::Fast.new;
+    await $client.connect;
+
+    my $alive = await $client.ping;
+    ok $alive, "Ping successful on connected client";
+
+    $client.close;
+}
+
+# Test 6: Is-alive check
+{
+    my $client = MongoDB::Fast.new;
+    await $client.connect;
+
+    my $alive = await $client.connection.is-alive;
+    ok $alive, "is-alive returns True for connected client";
+
+    $client.close;
+}
+
+# Test 7-8: Connection with custom reconnection settings
+{
+    my $client = MongoDB::Fast.new(
+        enable-auto-reconnect => True,
+        max-reconnect-attempts => 3,
+        initial-retry-delay => 0.05e0,
+        max-retry-delay => 1e0,
+        connection-timeout => 5
+    );
+
+    my $info = $client.connection.connection-info;
+    ok $info<auto-reconnect>, "Custom reconnection settings accepted";
+    is $info<max-reconnect-attempts>, 3, "Max reconnect attempts set to 3";
+}
+
+# Test 9: Disable auto-reconnect
+{
+    my $client = MongoDB::Fast.new(enable-auto-reconnect => False);
+    my $info = $client.connection.connection-info;
+
+    ok !$info<auto-reconnect>, "Auto-reconnect can be disabled";
+}
+
+# Test 10: Reset reconnection state
+{
+    my $client = MongoDB::Fast.new;
+    await $client.connect;
+
+    # Manually increment the counter (normally happens during failed reconnects)
+    $client.connection.reset-reconnection-state;
+
+    my $info = $client.connection.connection-info;
+    is $info<reconnect-attempts>, 0, "Reconnection state can be reset";
+
+    $client.close;
+}
+
+# Test 11: Connection info after operations
+{
+    my $client = MongoDB::Fast.new;
+    await $client.connect;
+
+    my $db = $client.db('test');
+    my $col = $db.collection('reconnection_test');
+
+    await $col.insert-one({ test => 'reconnection' });
+    await $col.find-one({ test => 'reconnection' });
+
+    my $info = $client.connection.connection-info;
+    ok $info<connected>, "Connection remains connected after operations";
+
+    await $col.delete-many({});
+    $client.close;
+}
+
+done-testing;

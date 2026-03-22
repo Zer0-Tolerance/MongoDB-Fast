@@ -1,0 +1,32 @@
+{
+  "name": "MongoDB::Fast",
+  "description": "High-performance async MongoDB driver for Raku with optimized BSON and wire protocol implementation",
+  "version": "0.1.0",
+  "perl": "6.d",
+  "authors": [
+    "MongoDB::Fast Contributors"
+  ],
+  "auth": "zef:fastmongo",
+  "license": "Artistic-2.0",
+  "source-url": "https://github.com/fastmongo/MongoDB-Fast/archive/refs/tags/0.1.0.tar.gz",
+  "support": {
+    "source": "https://github.com/fastmongo/MongoDB-Fast",
+    "bugtracker": "https://github.com/fastmongo/MongoDB-Fast/issues"
+  },
+  "depends": [],
+  "test-depends": [
+    "Test"
+  ],
+  "provides": {
+    "MongoDB::Fast": "lib/MongoDB/Fast.rakumod",
+    "MongoDB::Fast::BSON": "lib/MongoDB/Fast/BSON.rakumod",
+    "MongoDB::Fast::Wire": "lib/MongoDB/Fast/Wire.rakumod",
+    "MongoDB::Fast::Connection": "lib/MongoDB/Fast/Connection.rakumod",
+    "MongoDB::Fast::Collection": "lib/MongoDB/Fast/Collection.rakumod",
+    "MongoDB::Fast::Database": "lib/MongoDB/Fast/Database.rakumod",
+    "MongoDB::Fast::Cursor": "lib/MongoDB/Fast/Cursor.rakumod",
+    "MongoDB::Fast::ObjectID": "lib/MongoDB/Fast/ObjectID.rakumod"
+  },
+  "resources": [],
+  "tags": ["mongodb", "database", "nosql", "bson", "async", "performance"]
+}

@@ -1,0 +1,37 @@
+use v6.d;
+use Test;
+use MongoDB::Fast::Wire;
+use MongoDB::Fast::BSON;
+
+plan 5;
+
+my $wire = MongoDB::Fast::Wire.new;
+
+# Test 1: Build OP_MSG
+{
+    my %command = %(
+        ping => 1,
+    );
+
+    my $msg = $wire.build-op-msg(%command, 'admin');
+
+    ok $msg ~~ Buf, 'Message is Buf';
+    ok $msg.elems > 20, 'Message has reasonable size';
+
+    # Check header
+    my $msg-length = $msg[0] + ($msg[1] +< 8) + ($msg[2] +< 16) + ($msg[3] +< 24);
+    is $msg-length, $msg.elems, 'Message length matches';
+
+    my $opcode = $msg[12] + ($msg[13] +< 8) + ($msg[14] +< 16) + ($msg[15] +< 24);
+    is $opcode, 2013, 'OpCode is OP_MSG (2013)';
+}
+
+# Test 2: Request ID increments
+{
+    my $id1 = $wire.next-request-id;
+    my $id2 = $wire.next-request-id;
+
+    is $id2, $id1 + 1, 'Request ID increments';
+}
+
+done-testing;

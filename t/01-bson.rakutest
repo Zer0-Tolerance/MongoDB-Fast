@@ -1,0 +1,103 @@
+use v6.d;
+use Test;
+use MongoDB::Fast::BSON;
+
+plan 18;
+
+my $bson = MongoDB::Fast::BSON.new;
+
+# Test 1: Encode and decode simple document
+{
+    my %doc = %(
+        name => 'John',
+        age => 30,
+        active => True,
+    );
+
+    my $encoded = $bson.encode(%doc);
+    ok $encoded ~~ Buf, 'Encoded to Buf';
+
+    my %decoded = $bson.decode($encoded);
+    is %decoded<name>, 'John', 'String decoded correctly';
+    is %decoded<age>, 30, 'Integer decoded correctly';
+    ok %decoded<active>, 'Boolean decoded correctly';
+}
+
+# Test 2: Test integers (32-bit and 64-bit)
+{
+    my %doc = %(
+        int32 => 42,
+        int64 => 9223372036854775807,  # Max int64
+        negative => -123,
+    );
+
+    my $encoded = $bson.encode(%doc);
+    my %decoded = $bson.decode($encoded);
+
+    is %decoded<int32>, 42, '32-bit integer';
+    is %decoded<int64>, 9223372036854775807, '64-bit integer';
+    is %decoded<negative>, -123, 'Negative integer';
+}
+
+# Test 3: Test nested documents
+{
+    my %doc = %(
+        user => %(
+            name => 'Alice',
+            address => %(
+                city => 'NYC',
+                zip => 10001,
+            ),
+        ),
+    );
+
+    my $encoded = $bson.encode(%doc);
+    my %decoded = $bson.decode($encoded);
+
+    is %decoded<user><name>, 'Alice', 'Nested string';
+    is %decoded<user><address><city>, 'NYC', 'Deeply nested string';
+    is %decoded<user><address><zip>, 10001, 'Deeply nested integer';
+}
+
+# Test 4: Test arrays
+{
+    my %doc = %(
+        tags => ['red', 'blue', 'green'],
+        numbers => [1, 2, 3, 4, 5],
+    );
+
+    my $encoded = $bson.encode(%doc);
+    my %decoded = $bson.decode($encoded);
+
+    is-deeply %decoded<tags>, ['red', 'blue', 'green'], 'String array';
+    is-deeply %decoded<numbers>, [1, 2, 3, 4, 5], 'Integer array';
+}
+
+# Test 5: Test null values
+{
+    my %doc = %(
+        nullable => Nil,
+        present => 'value',
+    );
+
+    my $encoded = $bson.encode(%doc);
+    my %decoded = $bson.decode($encoded);
+
+    nok %decoded<nullable>.defined, 'Null value';
+    is %decoded<present>, 'value', 'Non-null value';
+}
+
+# Test 6: ObjectID generation
+{
+    my $oid1 = $bson.generate-object-id;
+    my $oid2 = $bson.generate-object-id;
+
+    ok $oid1.defined, 'ObjectID is defined';
+    is $oid1.bytes.elems, 12, 'ObjectID is 12 bytes';
+    isnt $oid1, $oid2, 'Different ObjectIDs generated';
+
+    my $hex = $bson.objectid-to-hex($oid1);
+    is $hex.chars, 24, 'Hex representation is 24 chars';
+}
+
+done-testing;
