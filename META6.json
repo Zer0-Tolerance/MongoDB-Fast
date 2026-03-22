@@ -6,7 +6,7 @@
   "authors": [
     "MongoDB::Fast Contributors"
   ],
-  "auth": "github:Zer0-Tolerance",
+  "auth": "zef:Zer0-Tolerance",
   "license": "Artistic-2.0",
   "source-url": "https://github.com/fastmongo/MongoDB-Fast/archive/refs/tags/0.1.0.tar.gz",
   "support": {
