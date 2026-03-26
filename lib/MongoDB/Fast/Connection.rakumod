@@ -145,6 +145,9 @@ method !reconnect(--> Promise) {
                     await self!authenticate;
                 }
 
+                # Restart the background reader for the new socket
+                self!start-reader;
+
                 True;
             };
 
