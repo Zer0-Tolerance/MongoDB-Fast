@@ -2,6 +2,10 @@ Revision history for MongoDB::Fast
 
 {{$NEXT}}
 
+0.1.1  2026-03-27
+    - Fix reconnect: background reader was not restarted after reconnection,
+      causing all post-reconnect operations to hang indefinitely
+
 0.1.0  2026-03-22
     - Initial release
     - Async/await API using native Raku Promises
