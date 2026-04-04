@@ -1,14 +1,14 @@
 {
   "name": "MongoDB::Fast",
   "description": "High-performance async MongoDB driver for Raku with optimized BSON and wire protocol implementation",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "perl": "6.d",
   "authors": [
     "MongoDB::Fast Contributors"
   ],
   "auth": "zef:Zer0-Tolerance",
   "license": "Artistic-2.0",
-  "source-url": "https://github.com/Zer0-Tolerance/MongoDB-Fast/archive/refs/tags/v0.1.2.tar.gz",
+  "source-url": "https://github.com/Zer0-Tolerance/MongoDB-Fast/archive/refs/tags/v0.1.3.tar.gz",
   "support": {
     "source": "https://github.com/Zer0-Tolerance/MongoDB-Fast",
     "bugtracker": "https://github.com/Zer0-Tolerance/MongoDB-Fast/issues"

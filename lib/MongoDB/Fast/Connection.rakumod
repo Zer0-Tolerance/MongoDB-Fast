@@ -292,7 +292,7 @@ method !execute-with-retry(&operation --> Promise) {
             }
             if $catch-error {
                 my $err = $catch-error;
-                my $is-connection-error = $err.message ~~ /:i 'connection' | 'socket' | 'broken' | 'closed' | 'timeout'/;
+                my $is-connection-error = $err.message ~~ /:i 'connection' | 'socket' | 'broken' | 'closed' | 'timeout' | 'reset' | 'lost'/;
                 if $is-connection-error && $!enable-auto-reconnect && $attempt < $max-attempts - 1 {
                     note "Operation failed with connection error: {$err.message // $err}";
                     self!disconnect;
@@ -328,6 +328,7 @@ method !send-recv(Buf $msg, Int :$timeout = 30 --> Promise) {
         $!vow-channel.send($p.vow);   # pre-register before any async work
         my $prev = $!op-serializer;
         $next = $prev.then(-> $ {
+            die "Connection lost" unless $!socket && $!connected;
             await $!socket.write($msg);
             await $p;
         });
