@@ -2,6 +2,11 @@ Revision history for MongoDB::Fast
 
 {{$NEXT}}
 
+0.1.2  2026-04-04
+    - Fix start-reader: add CATCH fallback so unhandled connection resets on
+      older MoarVM versions don't crash the process as unhandled rejections
+    - Fix README clone URL (fastmongo → Zer0-Tolerance/MongoDB-Fast)
+
 0.1.1  2026-03-27
     - Fix reconnect: background reader was not restarted after reconnection,
       causing all post-reconnect operations to hang indefinitely

@@ -255,6 +255,17 @@ method !start-reader() {
                 $!connected = False;
             }
         }
+        CATCH {
+            # Catch anything that escapes the react block (e.g. connection reset
+            # on some MoarVM versions where QUIT doesn't fire) so the start{}
+            # Promise never becomes an unhandled rejection and crashes the process.
+            default {
+                $!connected = False;
+                while my $vow = $!vow-channel.poll {
+                    $vow.break($_);
+                }
+            }
+        }
     }
 }
 

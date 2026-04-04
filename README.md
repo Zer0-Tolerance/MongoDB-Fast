@@ -23,8 +23,8 @@ zef install MongoDB::Fast
 Or clone and install locally:
 
 ```bash
-git clone https://github.com/fastmongo/fastmongo.git
-cd fastmongo
+git clone https://github.com/Zer0-Tolerance/MongoDB-Fast
+cd MongoDB-Fast
 zef install .
 ```
 
