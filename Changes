@@ -2,6 +2,15 @@ Revision history for MongoDB::Fast
 
 {{$NEXT}}
 
+0.1.4  2026-04-23
+    - Fix blocking reconnect: !disconnect now flushes the vow channel and
+      resets the op-serializer so no stale vows survive a disconnect
+    - Fix !send-recv: enforce the :$timeout parameter via Promise.anyof so
+      half-open TCP sockets time out instead of blocking forever
+    - Fix !start-reader: wrap vow.keep in try to handle the race where a
+      timed-out vow is still in the channel when a response arrives
+    - Rewrite t/06-reconnection.rakutest with a real stop/start MongoDB cycle
+
 0.1.3  2026-04-04
     - Fix reconnect on connection reset: guard socket write against Nil socket
       so "Connection lost" is thrown instead of an unrecognised method-on-Nil error

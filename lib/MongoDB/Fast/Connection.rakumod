@@ -105,6 +105,12 @@ method !disconnect() {
     $!connected = False;
     $!socket = Nil;
     $!connect-promise = Nil;
+    # Break any vows still waiting — they will never be fulfilled on this socket
+    while my $vow = $!vow-channel.poll {
+        try { $vow.break("Connection closed") }
+    }
+    # Fresh serializer so the next op doesn't chain off a dead callback
+    $!op-serializer = Promise.kept(True);
 }
 
 # Calculate exponential backoff delay
@@ -243,7 +249,7 @@ method !start-reader() {
                     my $msg = $buf.subbuf(0, $msg-len);
                     $buf   = $buf.subbuf($msg-len);
                     if my $vow = $!vow-channel.poll {
-                        $vow.keep($msg);
+                        try { $vow.keep($msg) }
                     }
                 }
             }
@@ -330,7 +336,12 @@ method !send-recv(Buf $msg, Int :$timeout = 30 --> Promise) {
         $next = $prev.then(-> $ {
             die "Connection lost" unless $!socket && $!connected;
             await $!socket.write($msg);
-            await $p;
+            my $timer = Promise.in($timeout);
+            await Promise.anyof($p, $timer);
+            if $timer.status == Kept && $p.status != Kept {
+                die "Operation timed out after {$timeout}s";
+            }
+            $p.result;
         });
         # Always resolve op-serializer so the next op can proceed regardless of outcome
         $!op-serializer = $next.then(-> $ { True });

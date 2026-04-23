@@ -2,91 +2,99 @@ use v6.d;
 use Test;
 use MongoDB::Fast;
 
-plan 11;
+# ── helpers ───────────────────────────────────────────────────────────────────
 
-# Test 1-4: Basic connection info
+sub mongo-stop()  { run «brew services stop  mongodb-community», :out, :err }
+sub mongo-start() { run «brew services start mongodb-community», :out, :err }
+
+sub wait-for-mongo(Bool :$up, Int :$timeout = 20 --> Bool) {
+    my $deadline = now + $timeout;
+    while now < $deadline {
+        my $client = MongoDB::Fast.new;
+        my $ok = False;
+        try {
+            await $client.connect;
+            await $client.ping;
+            $ok = True;
+            CATCH { default {} }
+        }
+        $client.close;
+        return True if $ok == $up;
+        sleep 0.5;
+    }
+    False
+}
+
+# ── static config tests (no MongoDB needed) ───────────────────────────────────
+
+plan 12;
+
 {
     my $client = MongoDB::Fast.new;
     my $info = $client.connection.connection-info;
-
-    ok $info<host> eq '127.0.0.1', "Default host is 127.0.0.1";
-    ok $info<port> == 27017, "Default port is 27017";
-    ok $info<auto-reconnect>, "Auto-reconnect enabled by default";
-    is $info<reconnect-attempts>, 0, "Initial reconnect attempts is 0";
+    ok $info<host> eq '127.0.0.1',    'default host is 127.0.0.1';
+    ok $info<port> == 27017,           'default port is 27017';
+    ok $info<auto-reconnect>,          'auto-reconnect enabled by default';
+    is $info<reconnect-attempts>, 0,   'initial reconnect-attempts is 0';
 }
 
-# Test 5: Ping operation
-{
-    my $client = MongoDB::Fast.new;
-    await $client.connect;
-
-    my $alive = await $client.ping;
-    ok $alive, "Ping successful on connected client";
-
-    $client.close;
-}
-
-# Test 6: Is-alive check
-{
-    my $client = MongoDB::Fast.new;
-    await $client.connect;
-
-    my $alive = await $client.connection.is-alive;
-    ok $alive, "is-alive returns True for connected client";
-
-    $client.close;
-}
-
-# Test 7-8: Connection with custom reconnection settings
 {
     my $client = MongoDB::Fast.new(
-        enable-auto-reconnect => True,
+        enable-auto-reconnect  => True,
         max-reconnect-attempts => 3,
-        initial-retry-delay => 0.05e0,
-        max-retry-delay => 1e0,
-        connection-timeout => 5
+        initial-retry-delay    => 0.05e0,
+        connection-timeout     => 5,
     );
-
     my $info = $client.connection.connection-info;
-    ok $info<auto-reconnect>, "Custom reconnection settings accepted";
-    is $info<max-reconnect-attempts>, 3, "Max reconnect attempts set to 3";
+    ok $info<auto-reconnect>,           'custom reconnect settings accepted';
+    is $info<max-reconnect-attempts>, 3, 'max-reconnect-attempts == 3';
 }
 
-# Test 9: Disable auto-reconnect
 {
     my $client = MongoDB::Fast.new(enable-auto-reconnect => False);
-    my $info = $client.connection.connection-info;
-
-    ok !$info<auto-reconnect>, "Auto-reconnect can be disabled";
+    ok !$client.connection.connection-info<auto-reconnect>, 'auto-reconnect can be disabled';
 }
 
-# Test 10: Reset reconnection state
+# ── live tests ────────────────────────────────────────────────────────────────
+
 {
     my $client = MongoDB::Fast.new;
     await $client.connect;
-
-    # Manually increment the counter (normally happens during failed reconnects)
-    $client.connection.reset-reconnection-state;
-
-    my $info = $client.connection.connection-info;
-    is $info<reconnect-attempts>, 0, "Reconnection state can be reset";
-
+    ok (await $client.ping),                          'ping returns True on live connection';
+    ok (await $client.connection.is-alive),           'is-alive returns True on live connection';
     $client.close;
 }
 
-# Test 11: Connection info after operations
+# ── reconnect test: stop MongoDB, issue op, restart, verify recovery ──────────
+
 {
-    my $client = MongoDB::Fast.new;
+    my $client = MongoDB::Fast.new(
+        enable-auto-reconnect  => True,
+        max-reconnect-attempts => 10,
+        initial-retry-delay    => 0.2e0,
+        connection-timeout     => 15,
+    );
     await $client.connect;
+    my $col = $client.db('test').collection('reconnect_test');
+    await $col.insert-one({ ping => 1 });
 
-    my $db = $client.db('test');
-    my $col = $db.collection('reconnection_test');
+    # ── bring MongoDB down ────────────────────────────────────────────────────
+    mongo-stop();
+    ok wait-for-mongo(:!up, :timeout(20)), 'MongoDB stopped (confirmed port closed)';
 
-    await $col.insert-one({ test => 'reconnection' });
-    await $col.find-one({ test => 'reconnection' });
+    # ── bring MongoDB back ────────────────────────────────────────────────────
+    mongo-start();
+    ok wait-for-mongo(:up, :timeout(30)), 'MongoDB restarted (confirmed accepting connections)';
 
-    my $info = $client.connection.connection-info;
-    ok $info<connected>, "Connection remains connected after operations";
+    # ── driver should transparently reconnect on next operation ───────────────
+    my $ok = False;
+    try {
+        await $col.insert-one({ after => 'reconnect' });
+        my $doc = await $col.find-one({ after => 'reconnect' });
+        $ok = $doc<after> eq 'reconnect';
+        CATCH { default { diag "post-reconnect op failed: $_" } }
+    }
+    ok $ok, 'operation succeeds transparently after MongoDB restart';
 
     await $col.delete-many({});
     $client.close;
