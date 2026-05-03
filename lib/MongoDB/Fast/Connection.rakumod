@@ -23,7 +23,7 @@ has Channel $!vow-channel .= new;
 
 # Reconnection configuration
 has Bool $.enable-auto-reconnect = True;
-has Int $.max-reconnect-attempts = 5;
+has Int $.max-reconnect-attempts = 15;
 has Num $.initial-retry-delay = 0.1e0;  # seconds
 has Num $.max-retry-delay = 30e0;       # seconds
 has Int $.connection-timeout = 10;      # seconds
@@ -40,7 +40,7 @@ submethod BUILD(
     Str :$!password,
     Str :$!auth-database = 'admin',
     Bool :$!enable-auto-reconnect = True,
-    Int :$!max-reconnect-attempts = 5,
+    Int :$!max-reconnect-attempts = 15,
     Num :$!initial-retry-delay = 0.1e0,
     Num :$!max-retry-delay = 30e0,
     Int :$!connection-timeout = 10
@@ -305,7 +305,7 @@ method !execute-with-retry(&operation --> Promise) {
                     my $reconnected = await self!reconnect;
                     if !$reconnected {
                         if $!reconnect-attempts >= $!max-reconnect-attempts {
-                            die "Failed to reconnect after {$!max-reconnect-attempts} attempts. Last error: {$!last-error}";
+                            die "Failed to reconnect after {$!max-reconnect-attempts} attempts. Last error: {$!last-error // 'unknown'}";
                         }
                         # Will retry in next iteration
                     }
@@ -319,7 +319,7 @@ method !execute-with-retry(&operation --> Promise) {
         if $success {
             $result;
         } else {
-            die "Operation failed after {$max-attempts} attempts. Last error: {$!last-error}";
+            die "Operation failed after {$max-attempts} attempts. Last error: {$!last-error // 'unknown'}";
         }
     }
 }
@@ -327,7 +327,7 @@ method !execute-with-retry(&operation --> Promise) {
 # Serialize socket send+receive.  Each call pre-registers a Promise vow in
 # $!vow-channel synchronously (under $!lock), so the background reader always
 # has the correct vow ready even when TCP coalesces multiple responses.
-method !send-recv(Buf $msg, Int :$timeout = 30 --> Promise) {
+method !send-recv(Buf $msg, Int :$timeout = 60 --> Promise) {
     my ($p, $next);
     $!lock.protect: {
         $p = Promise.new;

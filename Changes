@@ -2,6 +2,12 @@ Revision history for MongoDB::Fast
 
 {{$NEXT}}
 
+0.1.5  2026-04-23
+    - Raise default max-reconnect-attempts from 5 to 15 for better resilience
+      during longer MongoDB restarts
+    - Reconnection test verified with real MongoDB stop/start cycle:
+      12/12 passing including live reconnect
+
 0.1.4  2026-04-23
     - Fix blocking reconnect: !disconnect now flushes the vow channel and
       resets the op-serializer so no stale vows survive a disconnect
