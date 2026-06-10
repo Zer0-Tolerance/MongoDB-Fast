@@ -15,11 +15,16 @@ has MongoDB::Fast::BSON $.bson;
 has Bool $.connected = False;
 has Lock $.lock;
 has Promise $.connect-promise;
-# Async operation serializer: ensures only one request/response cycle runs at a time
-has Promise $!op-serializer = Promise.kept(True);
-# FIFO queue of vows — pre-registered synchronously so the reader never
-# misses a response due to TCP coalescing.
-has Channel $!vow-channel .= new;
+# In-flight requests keyed by their wire requestID. The background reader
+# routes each response to the matching vow via its responseTo header field,
+# so many requests may be outstanding at once (pipelining) and a slow query
+# never blocks unrelated operations on the same connection. Guarded by $!lock.
+has %!pending;
+# Monotonic, thread-safe source of on-wire requestIDs. We stamp every outgoing
+# message with one of these (overwriting whatever Wire assigned) so concurrent
+# requests can never collide on a requestID — correctness of responseTo routing
+# depends on uniqueness, and Wire's own counter is not atomic.
+has atomicint $!next-rid = 0;
 
 # Reconnection configuration
 has Bool $.enable-auto-reconnect = True;
@@ -65,7 +70,8 @@ method connect(--> Promise) {
         }
 
         # Start persistent background reader — one Supply tap for the lifetime
-        # of this connection. Completed messages are routed via $!vow-channel.
+        # of this connection. Completed messages are routed by responseTo to the
+        # matching pending request.
         self!start-reader;
 
         True;
@@ -105,12 +111,10 @@ method !disconnect() {
     $!connected = False;
     $!socket = Nil;
     $!connect-promise = Nil;
-    # Break any vows still waiting — they will never be fulfilled on this socket
-    while my $vow = $!vow-channel.poll {
-        try { $vow.break("Connection closed") }
-    }
-    # Fresh serializer so the next op doesn't chain off a dead callback
-    $!op-serializer = Promise.kept(True);
+    # Break any requests still waiting — they will never be fulfilled on this socket
+    my @vows;
+    $!lock.protect: { @vows = %!pending.values; %!pending = () }
+    for @vows -> $vow { try { $vow.break("Connection closed") } }
 }
 
 # Calculate exponential backoff delay
@@ -231,8 +235,13 @@ method is-alive(--> Promise) {
 }
 
 # Persistent background reader — started once per connection in connect().
-# Assembles complete BSON messages from the socket byte stream and delivers
-# each finished message to the next vow in $!vow-channel (FIFO).
+# Assembles complete BSON messages from the socket byte stream and routes each
+# finished message to the request it answers, via the responseTo header field.
+method !fail-all-pending($cause) {
+    my @vows;
+    $!lock.protect: { @vows = %!pending.values; %!pending = () }
+    for @vows -> $vow { try { $vow.break($cause) } }
+}
 method !start-reader() {
     start {
         my $buf = buf8.new;
@@ -241,23 +250,25 @@ method !start-reader() {
                 $buf.append: $chunk;
                 # Deliver all complete messages that fit in the buffer
                 loop {
-                    last if $buf.elems < 4;
+                    last if $buf.elems < 16;          # need the full MsgHeader
                     my $msg-len = $buf[0] + ($buf[1] +< 8)
                                           + ($buf[2] +< 16)
                                           + ($buf[3] +< 24);
                     last if $buf.elems < $msg-len;
                     my $msg = $buf.subbuf(0, $msg-len);
                     $buf   = $buf.subbuf($msg-len);
-                    if my $vow = $!vow-channel.poll {
-                        try { $vow.keep($msg) }
-                    }
+                    # MsgHeader: int32 messageLength, requestID, responseTo, opCode.
+                    # responseTo is the requestID of the op this message answers.
+                    my $response-to = $msg[8] + ($msg[9] +< 8)
+                                              + ($msg[10] +< 16) + ($msg[11] +< 24);
+                    my $vow;
+                    $!lock.protect: { $vow = %!pending{$response-to}:delete }
+                    try { $vow.keep($msg) } with $vow;
                 }
             }
             QUIT {
                 # Socket error or closed — break all waiting operations
-                while my $vow = $!vow-channel.poll {
-                    $vow.break($_);
-                }
+                self!fail-all-pending($_);
                 $!connected = False;
             }
         }
@@ -267,9 +278,7 @@ method !start-reader() {
             # Promise never becomes an unhandled rejection and crashes the process.
             default {
                 $!connected = False;
-                while my $vow = $!vow-channel.poll {
-                    $vow.break($_);
-                }
+                self!fail-all-pending($_);
             }
         }
     }
@@ -298,7 +307,7 @@ method !execute-with-retry(&operation --> Promise) {
             }
             if $catch-error {
                 my $err = $catch-error;
-                my $is-connection-error = $err.message ~~ /:i 'connection' | 'socket' | 'broken' | 'closed' | 'timeout' | 'reset' | 'lost'/;
+                my $is-connection-error = $err.message ~~ /:i 'connection' | 'socket' | 'broken' | 'closed' | 'reset' | 'lost'/;
                 if $is-connection-error && $!enable-auto-reconnect && $attempt < $max-attempts - 1 {
                     note "Operation failed with connection error: {$err.message // $err}";
                     self!disconnect;
@@ -324,29 +333,49 @@ method !execute-with-retry(&operation --> Promise) {
     }
 }
 
-# Serialize socket send+receive.  Each call pre-registers a Promise vow in
-# $!vow-channel synchronously (under $!lock), so the background reader always
-# has the correct vow ready even when TCP coalesces multiple responses.
+# Pipelined socket send+receive.  The request's wire requestID (MsgHeader bytes
+# 4..7, little-endian) keys the pending vow, which the background reader resolves
+# by matching the response's responseTo field.  Requests are NOT serialized: many
+# may be outstanding at once, so a slow query never blocks unrelated operations
+# sharing this connection.  The vow is registered before the write so a fast
+# response can never arrive ahead of its pending slot.
 method !send-recv(Buf $msg, Int :$timeout = 60 --> Promise) {
-    my ($p, $next);
+    # Stamp a unique requestID into the MsgHeader (bytes 4..7, little-endian),
+    # overwriting Wire's non-atomic value so concurrent requests never collide.
+    my $rid = (++⚛$!next-rid) +& 0x7fffffff;
+    $msg[4] =  $rid         +& 0xff;
+    $msg[5] = ($rid +> 8)   +& 0xff;
+    $msg[6] = ($rid +> 16)  +& 0xff;
+    $msg[7] = ($rid +> 24)  +& 0xff;
+    # Register the vow and capture the socket atomically under $!lock so that
+    # a concurrent !disconnect cannot drain %!pending between the liveness check
+    # and the registration (TOCTOU), and so we hold a reference to the socket
+    # object that was live at registration time rather than reading $!socket
+    # inside the start{} block after a potential disconnect.
+    my ($p, $sock);
     $!lock.protect: {
-        $p = Promise.new;
-        $!vow-channel.send($p.vow);   # pre-register before any async work
-        my $prev = $!op-serializer;
-        $next = $prev.then(-> $ {
-            die "Connection lost" unless $!socket && $!connected;
-            await $!socket.write($msg);
-            my $timer = Promise.in($timeout);
-            await Promise.anyof($p, $timer);
-            if $timer.status == Kept && $p.status != Kept {
-                die "Operation timed out after {$timeout}s";
-            }
-            $p.result;
-        });
-        # Always resolve op-serializer so the next op can proceed regardless of outcome
-        $!op-serializer = $next.then(-> $ { True });
+        die "Connection lost" unless $!socket && $!connected;
+        $p    = Promise.new;
+        $sock = $!socket;
+        %!pending{$rid} = $p.vow;
     }
-    $next;
+    start {
+        CATCH {
+            # On any exception (write failure, timeout die, broken-vow rethrow)
+            # make sure the pending slot is reclaimed before propagating.
+            default {
+                $!lock.protect: { %!pending{$rid}:delete }
+                .rethrow;
+            }
+        }
+        await $sock.write($msg);
+        my $timer = Promise.in($timeout);
+        await Promise.anyof($p, $timer);
+        if $timer.status == Kept && $p.status != Kept {
+            die "Operation timed out after {$timeout}s";
+        }
+        await $p;
+    }
 }
 
 method run-command(Hash $command, Str $database = 'admin', Int :$timeout = 30 --> Promise) {

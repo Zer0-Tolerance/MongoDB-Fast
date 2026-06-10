@@ -1,0 +1,42 @@
+use v6.d;
+use Test;
+use MongoDB::Fast;
+
+# Proves the pipelining fix at the CLIENT level: concurrent requests must all
+# be in-flight simultaneously rather than waiting for the previous response.
+# Before the fix, the op-serializer forced one request/response cycle at a time,
+# so N pings took N × (RTT + server_time).  After the fix, all N requests are
+# written to the socket before awaiting any response, so the server's per-op
+# time is hidden behind concurrent in-flight work: N pings take ≈ N × server_time
+# + 1 × RTT, eliminating (N-1) RTTs.
+#
+# Threshold is ≥1.4× speedup.  On localhost the observed ratio is ~1.6–2×;
+# the modest margin accounts for scheduling variance under load.
+
+plan 3;
+
+my $client = MongoDB::Fast.new;
+await $client.connect;
+
+# Warm up — prime the connection so measurements aren't distorted by the TCP
+# handshake or first-authentication round-trip.
+for ^5 { await $client.ping }
+
+# --- Sequential baseline: 200 pings, one at a time ---
+my $t0 = now;
+for ^200 { await $client.ping }
+my $seq-time = now - $t0;
+
+# --- Pipelined: 200 pings all in-flight at once ---
+$t0 = now;
+my @p = (^200).map: { start { await $client.ping } };
+await Promise.allof(@p);
+my $pipe-time = now - $t0;
+
+ok @p.map(*.result).all.so, '200 concurrent pings all succeeded';
+ok $pipe-time < $seq-time,
+   "pipelined ({$pipe-time.round(0.001)}s) faster than sequential ({$seq-time.round(0.001)}s)";
+ok $pipe-time * 1.4 < $seq-time,
+   "pipelining gives ≥1.4× speedup: {$pipe-time.round(0.001)}s vs {$seq-time.round(0.001)}s";
+
+done-testing;

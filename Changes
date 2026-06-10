@@ -2,6 +2,22 @@ Revision history for MongoDB::Fast
 
 {{$NEXT}}
 
+0.2.0  2026-06-10
+    - Rewrite !send-recv as a fully pipelined multiplexer: requests are keyed
+      by their wire requestID (MsgHeader bytes 4-7) and the background reader
+      routes each response to the matching vow via the responseTo header field.
+      Many requests may now be outstanding on one connection simultaneously,
+      eliminating head-of-line blocking at the client level.
+    - Fix TOCTOU in !send-recv: liveness check and vow registration are now
+      atomic under $!lock, and the socket is captured at registration time so
+      a concurrent !disconnect cannot inject a Nil-socket write later.
+    - Fix !execute-with-retry: remove 'timeout' from the connection-error regex
+      so a legitimate slow-query timeout no longer triggers disconnect/reconnect
+      and potentially duplicated non-idempotent writes.
+    - Fix write-failure vow leak: a CATCH block in the send start{} ensures the
+      %!pending slot is always reclaimed if the socket write throws.
+    - Add xt/head-of-line.rakutest to prove pipelining speedup.
+
 0.1.5  2026-04-23
     - Raise default max-reconnect-attempts from 5 to 15 for better resilience
       during longer MongoDB restarts
