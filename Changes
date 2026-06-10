@@ -2,6 +2,12 @@ Revision history for MongoDB::Fast
 
 {{$NEXT}}
 
+0.2.1  2026-06-10
+    - Fix requestID uniqueness at the right layer: Wire::request-id is now an
+      atomicint incremented with ++⚛, so concurrent build-op-msg calls on a
+      shared Wire can never mint the same ID. Connection no longer needs its
+      own counter; it reads the ID Wire already stamped into the message.
+
 0.2.0  2026-06-10
     - Rewrite !send-recv as a fully pipelined multiplexer: requests are keyed
       by their wire requestID (MsgHeader bytes 4-7) and the background reader

@@ -20,11 +20,6 @@ has Promise $.connect-promise;
 # so many requests may be outstanding at once (pipelining) and a slow query
 # never blocks unrelated operations on the same connection. Guarded by $!lock.
 has %!pending;
-# Monotonic, thread-safe source of on-wire requestIDs. We stamp every outgoing
-# message with one of these (overwriting whatever Wire assigned) so concurrent
-# requests can never collide on a requestID — correctness of responseTo routing
-# depends on uniqueness, and Wire's own counter is not atomic.
-has atomicint $!next-rid = 0;
 
 # Reconnection configuration
 has Bool $.enable-auto-reconnect = True;
@@ -340,13 +335,10 @@ method !execute-with-retry(&operation --> Promise) {
 # sharing this connection.  The vow is registered before the write so a fast
 # response can never arrive ahead of its pending slot.
 method !send-recv(Buf $msg, Int :$timeout = 60 --> Promise) {
-    # Stamp a unique requestID into the MsgHeader (bytes 4..7, little-endian),
-    # overwriting Wire's non-atomic value so concurrent requests never collide.
-    my $rid = (++⚛$!next-rid) +& 0x7fffffff;
-    $msg[4] =  $rid         +& 0xff;
-    $msg[5] = ($rid +> 8)   +& 0xff;
-    $msg[6] = ($rid +> 16)  +& 0xff;
-    $msg[7] = ($rid +> 24)  +& 0xff;
+    # The MsgHeader requestID (bytes 4..7, little-endian) keys the pending map and
+    # is echoed back by the server as responseTo. Wire mints it atomically, so it
+    # is unique across concurrent requests on this connection.
+    my $rid = $msg[4] + ($msg[5] +< 8) + ($msg[6] +< 16) + ($msg[7] +< 24);
     # Register the vow and capture the socket atomically under $!lock so that
     # a concurrent !disconnect cannot drain %!pending between the liveness check
     # and the registration (TOCTOU), and so we hold a reference to the socket

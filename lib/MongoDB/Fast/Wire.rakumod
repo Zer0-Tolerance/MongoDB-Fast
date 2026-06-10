@@ -18,7 +18,12 @@ constant FLAG_CHECKSUM_PRESENT = 1;
 constant FLAG_MORE_TO_COME     = 2;
 constant FLAG_EXHAUST_ALLOWED  = 1 +< 16;
 
-has Int $.request-id = 0;
+# Atomic so concurrent build-op-msg calls on a shared Wire can never mint the
+# same requestID. A duplicate id would collide in the connection's pending map,
+# dropping or misrouting the response (the DarkRecon listener hang). The wire
+# protocol only requires per-connection uniqueness, so a plain counter is fine
+# as long as it is incremented atomically.
+has atomicint $.request-id = 0;
 has MongoDB::Fast::BSON $.bson;
 
 submethod BUILD() {
@@ -26,7 +31,7 @@ submethod BUILD() {
 }
 
 method next-request-id(--> Int) {
-    return ++$!request-id;
+    return ++⚛$!request-id;
 }
 
 # Build OP_MSG message (modern MongoDB wire protocol)
