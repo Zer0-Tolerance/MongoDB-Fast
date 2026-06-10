@@ -360,8 +360,18 @@ method !send-recv(Buf $msg, Int :$timeout = 60 --> Promise) {
                 .rethrow;
             }
         }
-        await $sock.write($msg);
+        # One timer bounds the WHOLE operation — both the socket write and the
+        # wait for the response. The write must be covered too: if a stalled
+        # socket (overloaded/half-dead peer) blocks $sock.write, an unbounded
+        # write would hang forever beneath the caller's own guard, surfacing as
+        # the "timed out after 60s — MongoDB may be hung" symptom with no inner
+        # error ever thrown.
         my $timer = Promise.in($timeout);
+        my $write = $sock.write($msg);
+        await Promise.anyof($write, $timer);
+        die "Operation timed out after {$timeout}s (write stalled)"
+            if $timer.status == Kept && $write.status != Kept;
+        $write.result;   # surface a write failure (broken Promise rethrows here)
         await Promise.anyof($p, $timer);
         if $timer.status == Kept && $p.status != Kept {
             die "Operation timed out after {$timeout}s";

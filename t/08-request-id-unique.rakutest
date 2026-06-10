@@ -1,0 +1,44 @@
+use v6.d;
+use Test;
+use MongoDB::Fast::Wire;
+
+# Regression test for the requestID collision behind the DarkRecon listener hang.
+#
+# One Wire is shared by all operations on a connection. Every request must get a
+# unique requestID, because the connection's reader routes each response to the
+# matching pending request by the responseTo (== requestID) the server echoes
+# back. When next-request-id used a plain non-atomic `++`, concurrent callers
+# could read-modify-write the same value and hand out duplicate ids → colliding
+# pending slots → dropped responses (30s timeouts) or responses delivered to the
+# wrong caller. This test hammers next-request-id from many threads and asserts
+# every id is unique; it fails on the non-atomic version and passes once atomic.
+
+plan 3;
+
+my $wire = MongoDB::Fast::Wire.new;
+
+constant THREADS = 8;
+constant PER     = 20_000;
+constant TOTAL   = THREADS * PER;
+
+# Release barrier so all threads contend on the counter at once — maximises the
+# read-modify-write race window the non-atomic version is vulnerable to.
+my $go = Promise.new;
+my @workers = (^THREADS).map: {
+    start {
+        await $go;
+        # Eager: the increments MUST happen here, in the worker thread, to create
+        # real contention — a lazy map would defer them to serial reification.
+        my int @r;
+        @r.push($wire.next-request-id) for ^PER;
+        @r
+    }
+};
+$go.keep(True);
+my @ids = await Promise.allof(@workers).then({ @workers.map(*.result).flat.List });
+
+is @ids.elems, TOTAL, "minted {TOTAL} ids across {THREADS} threads";
+is @ids.unique.elems, TOTAL, "every requestID is unique (no non-atomic ++ collisions)";
+ok @ids.unique.elems == @ids.elems, "no duplicate requestIDs under concurrency";
+
+done-testing;

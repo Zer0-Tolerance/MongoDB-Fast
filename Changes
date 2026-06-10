@@ -2,6 +2,16 @@ Revision history for MongoDB::Fast
 
 {{$NEXT}}
 
+0.2.2  2026-06-11
+    - Fix stalled-socket hang: the per-operation timer now covers the socket
+      write as well as the response wait, so a half-dead peer that blocks
+      on write no longer hangs forever beneath the caller's timeout guard.
+    - Add t/08-request-id-unique.rakutest: 8-thread hammer test proving
+      Wire's atomic requestID counter mints no duplicates (160k ids).
+    - Add xt/concurrent-correctness.rakutest: 300 concurrent point queries
+      on one connection verify every response is routed to the correct caller
+      (regression test for the FIFO desync / DarkRecon listener hang).
+
 0.2.1  2026-06-10
     - Fix requestID uniqueness at the right layer: Wire::request-id is now an
       atomicint incremented with ++⚛, so concurrent build-op-msg calls on a

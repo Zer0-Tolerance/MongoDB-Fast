@@ -1,0 +1,55 @@
+use v6.d;
+use Test;
+use MongoDB::Fast;
+
+# Regression test for the response-routing bug behind the DarkRecon listener hang.
+#
+# A single connection multiplexes many concurrent requests. Each response MUST be
+# delivered to the exact caller that issued the matching request. The old reader
+# matched responses to requests by blind FIFO order and the requestID was minted
+# by a non-atomic ++ counter, so under concurrency responses could be dropped
+# (→ 30s timeouts) or handed to the WRONG caller (→ silently wrong data).
+#
+# The fix: route by the wire responseTo id, and stamp each request with a unique
+# requestID from an atomic counter. This test fails on the old behaviour (lost or
+# misrouted responses) and passes once routing is correct.
+
+plan 3;
+
+my $client = MongoDB::Fast.new;
+await $client.connect;
+my $db  = $client.db('correctness_test');
+my $col = $db.collection('docs');
+await $col.drop;
+
+# Each doc's marker is uniquely derived from its _id so a misrouted response is
+# detectable: the returned marker won't match the _id we asked for.
+constant N = 300;
+await $col.insert-many( (^N).map({ %( _id => $_, marker => "m-{$_}-{$_ * 7 + 13}" ) }).List );
+
+# Fire N distinct point queries concurrently on the one shared connection.
+# A release barrier makes every worker reach the send path at the same instant,
+# maximising contention on the requestID counter so a non-atomic ++ (the original
+# bug) reliably produces colliding ids → overwritten/orphaned pending slots →
+# dropped or misrouted responses. Without the barrier the race window is tiny and
+# the bug only shows up flakily.
+my $go = Promise.new;
+my @promises = (^N).map: -> $i {
+    start {
+        await $go;
+        my $doc = await $col.find-one({ _id => $i });
+        %( asked => $i, doc => $doc );
+    }
+};
+$go.keep(True);
+my @results = await Promise.allof(@promises).then({ @promises.map(*.result) });
+
+my $missing  = @results.grep({ !.<doc>.defined }).elems;
+my $misrouted = @results.grep({ .<doc>.defined && .<doc><marker> ne "m-{.<asked>}-{.<asked> * 7 + 13}" }).elems;
+
+is $missing,   0, "all {N} concurrent queries got a response (none dropped/timed out)";
+is $misrouted, 0, "every response was routed to the correct caller (no FIFO desync)";
+ok @results.elems == N, "all {N} concurrent queries completed";
+
+await $col.drop;
+done-testing;
